@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=67", "setuptools_scm[toml]>=7.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "g3w-admin-plugins"
+dynamic = ["version"]
+description = "On-demand manager for public G3W-ADMIN plugins"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["Django>=4.2", "packaging>=21"]
+classifiers = [
+    "Environment :: Web Environment",
+    "Framework :: Django",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+]
+
+[project.urls]
+Homepage = "https://github.com/raruto/g3w-admin-plugins"
+"Bug Tracker" = "https://github.com/raruto/g3w-admin-plugins/issues"
+
+[tool.setuptools.packages.find]
+include = ["g3w_plugins*"]
+exclude = ["*.tests", "*.tests.*"]
+namespaces = false
+
+[tool.setuptools.package-data]
+g3w_plugins = ["templates/plugins/*.html"]
+
+[tool.setuptools.exclude-package-data]
+"*" = ["tests/*", "tests/**/*"]
+
+[tool.setuptools_scm]
+fallback_version = "0.1.0"

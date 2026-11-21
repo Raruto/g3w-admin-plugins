@@ -1,0 +1,333 @@
+{% extends "base.html" %}
+{% block page_header %}<h1>Plugins</h1>{% endblock %}
+{% block main_content %}
+<style>
+.plugin-change button i, .plugin-update button i { margin-right: 0.4em; }
+.plugin-update { display: inline-block; margin-left: 0.4em; }
+.plugin-update[hidden], .retry-version[hidden] { display: none !important; }
+.plugin-change .btn-success { background-color: #256d36; border-color: #1d562a; }
+.plugin-change .btn-success:hover, .plugin-change .btn-success:focus { background-color: #1d562a; }
+.plugin-change .btn-danger { background-color: #ad302a; border-color: #882722; }
+.plugin-change .btn-danger:hover, .plugin-change .btn-danger:focus { background-color: #882722; }
+.plugin-warning { display: block; color: #8a4b08; }
+</style>
+<p><b>Back up your database and plugins before making changes. Disabling a plugin preserves its data. {% if reload_available %}Changes apply automatically.{% else %}Restart G3W-SUITE and its consumer to apply changes.{% endif %}</b></p>
+{% if job.status == "running" %}
+<div id="job-status" class="alert alert-info" role="status" aria-live="polite">Preparing {{ job.plugin }}. Refresh this page to check progress.</div>
+{% elif job.status == "succeeded" %}
+<div id="job-status" class="alert {% if job.reload == 'requested' and web_applied and not consumer_required or job.reload == 'requested' and web_applied and consumer_applied %}alert-success{% else %}alert-info{% endif %}" role="status" aria-live="polite" data-plugin="{{ job.plugin }}" data-action="{{ job.action }}" data-target="{{ job.target|default:'' }}" data-requested-at="{{ job.reload_requested_at|default:''|stringformat:'s' }}" {% if job.reload == 'requested' and web_applied and not consumer_required or job.reload == 'requested' and web_applied and consumer_applied %}data-confirmed="true" hidden{% endif %}>{{ job.plugin }}: {{ job.action }} completed. {% if job.reload == "requested" %}{% if web_applied and consumer_required and consumer_applied %}Web and consumer loaded the new configuration.{% elif web_applied and not consumer_required %}Web loaded the new configuration; the consumer is disabled.{% else %}Reload requested; refresh to check web and consumer status.{% endif %}{% else %}Reload G3W-SUITE and its consumer to apply.{% endif %}</div>
+<noscript><style>#job-status[hidden] { display: block !important; }</style></noscript>
+{% elif job.status == "reload_failed" %}
+<div id="job-status" class="alert alert-warning" role="status" aria-live="polite">Preparation completed, but automatic reload failed: {{ job.error }}. Retry the reload or restart manually.</div>
+{% elif job.status == "failed" %}
+<div id="job-status" class="alert alert-danger" role="status" aria-live="polite"><p>Plugin preparation failed. The previous configuration is preserved if the failure occurred before saving, but database, static files or menus may already have changed. Check the server logs and backups before retrying.</p><pre>{{ job.error }}</pre></div>
+{% else %}
+<div id="job-status" class="alert" role="status" aria-live="polite" hidden></div>
+{% endif %}
+<progress id="job-progress" aria-label="Plugin preparation in progress" {% if job.status != "running" %}hidden{% endif %}></progress>
+{% if reload_available %}
+<form id="manual-reload" class="job-submit" method="post" onsubmit="return confirm('Retry reloading G3W-SUITE and its consumer?');" {% if job.status != "reload_failed" and job.status != "succeeded" %}hidden{% elif job.reload == "requested" %}hidden{% endif %}>
+  {% csrf_token %}
+  <button class="job-action" type="submit" name="action" value="reload" {% if job.status == "running" %}disabled{% endif %}>Retry reload</button>
+</form>
+{% endif %}
+<table class="table table-striped">
+<thead><tr><th>Package</th><th>Version</th><th>Status</th><th>Action</th></tr></thead>
+<tbody>
+{% for plugin in plugins %}
+<tr data-plugin="{{ plugin.package }}" data-version="{{ plugin.version|default_if_none:'' }}" data-enabled="{% if plugin.enabled %}true{% else %}false{% endif %}" data-bundled="{% if plugin.bundled %}true{% else %}false{% endif %}">
+  <td>{% if plugin.bundled %}<a href="https://github.com/g3w-suite/g3w-admin/tree/dev/g3w-admin/{{ plugin.app }}">{{ plugin.display_name }}</a>{% else %}<a href="https://pypi.org/project/{{ plugin.package }}/">{{ plugin.display_name }}</a>{% endif %}</td>
+  <td class="plugin-version"><span class="plugin-version-value">{% if plugin.bundled %}{{ VERSION|default:"Not available" }}{% elif plugin.version %}{{ plugin.version }}{% else %}Not available{% endif %}</span>
+    {% if not plugin.bundled %}
+    <span class="plugin-version-info"></span>
+    <form method="post" class="plugin-update job-submit" hidden>{% csrf_token %}
+      <input type="hidden" name="plugin" value="{{ plugin.package }}">
+      <input type="hidden" name="version" value="">
+      <button class="job-action btn btn-primary btn-sm" name="action" value="update" aria-label="Update {{ plugin.package }}" {% if job.status == "running" %}disabled{% endif %}><i class="fa fa-arrow-circle-up" aria-hidden="true"></i> <span>Update</span></button>
+    </form>
+    <button type="button" class="retry-version btn btn-default btn-xs" hidden>Retry</button>
+    {% endif %}
+  </td>
+  <td class="plugin-status">{{ plugin.status }}</td>
+  <td><form method="post" class="plugin-change job-submit">{% csrf_token %}
+    <input type="hidden" name="plugin" value="{{ plugin.package }}">
+    <button class="job-action btn {% if plugin.enabled %}btn-danger{% else %}btn-success{% endif %} btn-sm" data-blocked="{% if plugin.warning %}true{% else %}false{% endif %}" name="action" value="{% if plugin.enabled %}disable{% else %}enable{% endif %}" aria-label="{% if plugin.enabled %}Disable{% else %}Enable{% endif %} {{ plugin.display_name }}" {% if job.status == "running" or plugin.warning %}disabled{% endif %}>
+      <i class="fa {% if plugin.enabled %}fa-stop{% else %}fa-play{% endif %}" aria-hidden="true"></i> <span>{% if plugin.enabled %}Disable{% else %}Enable{% endif %}</span>
+    </button>
+  </form><small class="plugin-warning">{{ plugin.warning }}</small></td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+<script>
+(function () {
+  var status = document.getElementById('job-status');
+  var progress = document.getElementById('job-progress');
+  var manualReload = document.getElementById('manual-reload');
+  var statusUrl = '{{ status_url|escapejs }}';
+  var alternateStatusUrl = '{{ alternate_status_url|escapejs }}';
+  var versionUrl = '{{ version_url|escapejs }}';
+  var versions = {};
+  var pending = false;
+  var submitError = '';
+  var successStorageKey = 'g3w-plugins-seen-success';
+  var previouslySeenSuccess = null;
+  try {
+    previouslySeenSuccess = sessionStorage.getItem(successStorageKey);
+  } catch (error) {
+    console.warn('Cannot remember plugin success notifications:', error);
+  }
+  var navigation = typeof performance !== 'undefined' && performance.getEntriesByType
+    ? performance.getEntriesByType('navigation')[0] : null;
+  if (navigation && navigation.type === 'reload' && status.dataset.confirmed === 'true') {
+    previouslySeenSuccess = successKey({
+      plugin: status.dataset.plugin,
+      action: status.dataset.action,
+      target: status.dataset.target,
+      reload_requested_at: status.dataset.requestedAt
+    });
+  }
+  var phases = {
+    starting: 'Starting preparation',
+    install: 'Installing plugin packages and dependencies',
+    migrate: 'Applying database migrations',
+    collectstatic: 'Collecting static files (this may take several minutes)',
+    sitetree_resync_apps: 'Updating menus',
+    save: 'Saving the plugin configuration',
+    reload: 'Requesting reload of G3W-SUITE and its consumer'
+  };
+  function lockActions(locked) {
+    document.querySelectorAll('.job-action').forEach(function (button) {
+      button.disabled = locked || button.dataset.blocked === 'true';
+    });
+  }
+  function show(message, type) {
+    status.hidden = false;
+    progress.hidden = type !== 'info';
+    status.className = 'alert alert-' + type;
+    status.textContent = message;
+  }
+  function successKey(job) {
+    return JSON.stringify([job.plugin, job.action, job.target || '',
+      job.reload_requested_at ? Number(job.reload_requested_at) : null]);
+  }
+  function showSuccess(job, message) {
+    var key = successKey(job);
+    if (key === previouslySeenSuccess) {
+      status.hidden = true;
+      progress.hidden = true;
+    } else {
+      show(message, 'success');
+    }
+    try {
+      sessionStorage.setItem(successStorageKey, key);
+    } catch (error) {
+      console.warn('Cannot remember plugin success notifications:', error);
+    }
+  }
+  function renderVersion(row, entry) {
+    var value = row.querySelector('.plugin-version-value');
+    var info = row.querySelector('.plugin-version-info');
+    var form = row.querySelector('.plugin-update');
+    value.textContent = entry.installed || entry.latest || 'Not available';
+    if (entry.error) {
+      info.textContent = ' (' + entry.error + ')';
+    } else if (entry.checking) {
+      info.textContent = entry.installed ? ' (checking for updates...)' : ' (checking PyPI...)';
+    } else if (entry.available && !entry.enabled) {
+      info.textContent = ' (enable to update to ' + entry.latest + ')';
+    } else {
+      info.textContent = '';
+    }
+    row.querySelector('.retry-version').hidden = !entry.error;
+    form.hidden = !(entry.installed && entry.available && entry.enabled);
+    if (entry.latest) {
+      form.querySelector('input[name=version]').value = entry.latest;
+      form.querySelector('button').title = 'Update to ' + entry.latest;
+      form.querySelector('button span').textContent = 'Update to ' + entry.latest;
+    }
+  }
+  function checkVersion(row, installed, enabled) {
+    var packageName = row.dataset.plugin;
+    var entry = {installed: installed, enabled: enabled, checking: true};
+    versions[packageName] = entry;
+    renderVersion(row, entry);
+    fetch(versionUrl + '?plugin=' + encodeURIComponent(packageName), {
+      credentials: 'same-origin', cache: 'no-store'
+    }).then(function (response) {
+      if (response.redirected) throw new Error('Session expired. Sign in again.');
+      return response.json().then(function (data) {
+        if (!response.ok) throw new Error(data.error || 'Version check failed');
+        if (response.status === 202) return null;
+        if (data.installed !== installed) throw new Error('Web worker version changed; retry');
+        return data;
+      });
+    }).then(function (data) {
+      if (versions[packageName] !== entry) return;
+      if (!data) {
+        window.setTimeout(function () {
+          if (versions[packageName] === entry) checkVersion(row, installed, entry.enabled);
+        }, 1500);
+        return;
+      }
+      entry.latest = data.latest;
+      entry.available = data.available;
+      entry.checking = false;
+      renderVersion(row, entry);
+    }).catch(function (error) {
+      if (versions[packageName] !== entry) return;
+      entry.error = error.message;
+      entry.checking = false;
+      renderVersion(row, entry);
+    });
+  }
+  function update(data) {
+    var job = data.job;
+    var awaitingWeb = job && job.status === 'succeeded' && job.reload === 'requested' &&
+      !data.web_applied && job.reload_requested_at && data.server_time - job.reload_requested_at < 60;
+    var reloadTimedOut = job && job.status === 'succeeded' && job.reload === 'requested' &&
+      !data.web_applied && !awaitingWeb;
+    var awaitingConsumer = job && job.status === 'succeeded' && job.reload === 'requested' &&
+      data.consumer_required && !data.consumer_applied;
+    var consumerTimedOut = awaitingConsumer &&
+      (!job.reload_requested_at || data.server_time - job.reload_requested_at >= 60);
+    lockActions(pending || awaitingWeb || awaitingConsumer || (job && job.status === 'running'));
+    if (manualReload) {
+      manualReload.hidden = !(job && (job.status === 'reload_failed' ||
+        (job.status === 'succeeded' && ((job.reload !== 'requested' &&
+          (job.reload || !data.web_applied)) || reloadTimedOut || consumerTimedOut))));
+      if (consumerTimedOut) manualReload.querySelector('button').disabled = pending;
+    }
+    if (pending) {
+      return;
+    } else if (job && job.status === 'running') {
+      show((job.plugin ? job.plugin + ': ' : '') +
+        (phases[job.phase] || 'Starting preparation') + '. Please wait.', 'info');
+    } else if (submitError) {
+      show('Could not confirm the operation: ' + submitError + '. Check the status before retrying.', 'danger');
+    } else if (job && job.status === 'reload_failed') {
+      show('Preparation completed, but automatic reload failed: ' + job.error +
+        '. Retry the reload or restart G3W-SUITE and its consumer manually.', 'warning');
+    } else if (job && job.status === 'succeeded') {
+      if (awaitingWeb) {
+        show('Preparation completed. Waiting for the web process to load the new configuration.', 'info');
+      } else if (reloadTimedOut) {
+        show('Reload was requested, but the web process has not confirmed the new configuration. Retry the reload or restart manually.', 'warning');
+      } else if (awaitingConsumer) {
+        show(consumerTimedOut
+          ? 'The consumer has not confirmed the new configuration. It may still be finishing tasks; retry the reload or restart it manually if needed.'
+          : 'Web configuration loaded. Waiting for the consumer to finish reloading.', consumerTimedOut ? 'warning' : 'info');
+      } else if (job.reload === 'requested') {
+        showSuccess(job, job.plugin + ': ' + job.action + ' completed. ' +
+          (data.consumer_required ? 'Web and consumer loaded the new configuration.' :
+            'Web loaded the new configuration; the consumer is disabled.'));
+      } else if (!job.reload && data.web_applied) {
+        show(job.plugin + ': ' + job.action + ' completed. A web worker has loaded the current configuration; consumer status cannot be confirmed.', 'success');
+      } else {
+        show(job.plugin + ': ' + job.action + ' completed. Restart G3W-SUITE and its consumer to apply.', 'success');
+      }
+    } else if (job && job.status === 'failed') {
+      show('Plugin preparation failed: ' + job.error +
+        ' The previous configuration is preserved if the failure occurred before saving, but database, static files or menus may already have changed. Check server logs and backups before retrying.', 'danger');
+    } else {
+      status.hidden = true;
+      progress.hidden = true;
+    }
+    data.plugins.forEach(function (plugin) {
+      document.querySelectorAll('tr[data-plugin]').forEach(function (row) {
+        if (row.dataset.plugin === plugin.package) {
+          row.querySelector('.plugin-status').textContent = plugin.status;
+          var button = row.querySelector('.plugin-change button');
+          var enabled = plugin.desired === null ? plugin.running : plugin.desired;
+          var label = enabled ? 'Disable' : 'Enable';
+          button.value = enabled ? 'disable' : 'enable';
+          button.classList.toggle('btn-success', !enabled);
+          button.classList.toggle('btn-danger', enabled);
+          button.setAttribute('aria-label', label + ' ' + plugin.display_name);
+          button.querySelector('i').className = 'fa ' + (enabled ? 'fa-stop' : 'fa-play');
+          button.querySelector('span').textContent = label;
+          button.dataset.blocked = plugin.warning ? 'true' : 'false';
+          row.querySelector('.plugin-warning').textContent = plugin.warning;
+          if (!plugin.bundled) {
+            var entry = versions[plugin.package];
+            if (!entry || entry.installed !== plugin.version) {
+              checkVersion(row, plugin.version, enabled);
+            } else {
+              entry.enabled = enabled;
+              renderVersion(row, entry);
+            }
+          }
+        }
+      });
+    });
+    lockActions(pending || awaitingWeb || awaitingConsumer || (job && job.status === 'running'));
+    if (manualReload && consumerTimedOut) manualReload.querySelector('button').disabled = pending;
+  }
+  function fetchStatus(url) {
+    return fetch(url, {credentials: 'same-origin', cache: 'no-store'}).then(function (response) {
+      if (response.status === 404 && url === statusUrl && alternateStatusUrl) {
+        return fetchStatus(alternateStatusUrl);
+      }
+      if (!response.ok || response.redirected) throw new Error('Status request failed');
+      return response.json().then(function (data) {
+        if (url === alternateStatusUrl && data.manager_url) {
+          window.location.assign(data.manager_url);
+          return null;
+        }
+        return data;
+      });
+    });
+  }
+  function poll() {
+    fetchStatus(statusUrl)
+      .then(function (data) { if (data) update(data); })
+      .catch(function () {
+        lockActions(true);
+        show('Unable to check preparation status. Retrying; actions are disabled until the connection is restored.', 'warning');
+      })
+      .finally(function () { window.setTimeout(poll, 3000); });
+  }
+  document.querySelectorAll('.job-submit').forEach(function (form) {
+    form.addEventListener('submit', function (event) {
+      if (!event.submitter) return;
+      if (event.submitter.value === 'update' &&
+          !window.confirm('Update this plugin? Database migrations may change data. Ensure you have a current backup.')) {
+        event.preventDefault();
+        return;
+      }
+      event.preventDefault();
+      var data = new FormData(form);
+      data.append('action', event.submitter.value);
+      submitError = '';
+      pending = true;
+      lockActions(true);
+      show(event.submitter.value === 'reload' ? 'Requesting process reload. Please wait.' :
+        'Starting preparation. Please wait.', 'info');
+      fetch(form.getAttribute('action') || window.location.href, {
+        method: 'POST', body: data, credentials: 'same-origin',
+        headers: {'X-Requested-With': 'XMLHttpRequest'}
+      }).then(function (response) {
+        if (response.redirected) throw new Error('Session expired. Sign in again.');
+        if (!(response.headers.get('content-type') || '').includes('application/json')) {
+          throw new Error('Unexpected response (HTTP ' + response.status + ')');
+        }
+        return response.json().then(function (data) {
+          if (!response.ok) throw new Error(data.error || 'Could not start preparation');
+        });
+      }).catch(function (error) {
+        submitError = error.message;
+        show('Could not confirm the operation: ' + submitError + '. Check the status before retrying.', 'danger');
+      }).finally(function () { pending = false; });
+    });
+  });
+  document.querySelectorAll('tr[data-plugin][data-bundled="false"]').forEach(function (row) {
+    checkVersion(row, row.dataset.version || null, row.dataset.enabled === 'true');
+    row.querySelector('.retry-version').addEventListener('click', function () {
+      var entry = versions[row.dataset.plugin];
+      checkVersion(row, entry.installed, entry.enabled);
+    });
+  });
+  poll();
+}());
+</script>
+{% endblock %}

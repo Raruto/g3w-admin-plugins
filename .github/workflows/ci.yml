@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: g3w-suite/.github/.github/workflows/ci.yml@main
+
+  docker-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    container: g3wsuite/g3w-suite:dev
+    services:
+      postgres:
+        image: postgis/postgis:14-3.4
+        env:
+          POSTGRES_DB: bdd
+          POSTGRES_USER: bdd
+          POSTGRES_PASSWORD: bdd
+        options: >-
+          --health-cmd "pg_isready -U bdd -d bdd"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 12
+      redis:
+        image: redis:8.6.2
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      G3W_PLUGINS_TEST_CONTAINER: "1"
+      G3WSUITE_POSTGRES_DBNAME: bdd
+      G3WSUITE_POSTGRES_USER_LOCAL: bdd
+      G3WSUITE_POSTGRES_PASS: bdd
+      G3WSUITE_POSTGRES_HOST: postgres
+      G3WSUITE_POSTGRES_PORT: "5432"
+      QT_QPA_PLATFORM: offscreen
+      PYTHONPATH: ${{ github.workspace }}:/usr/share/qgis/python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: g3w-suite/g3w-suite-docker
+          path: docker-reference
+      - name: Run Docker BDD scenarios
+        run: |
+          python3 -m pip install --break-system-packages -r requirements_test.txt
+          cp docker-reference/config/g3w-suite/settings_docker.py /tmp/docker-settings.py
+          cp /tmp/docker-settings.py /code/g3w-admin/base/settings/local_settings.py
+          mkdir -p /shared-volume/media /shared-volume/project_data
+          python3 -m behave g3w_plugins/tests/features/docker.feature
