@@ -1,12 +1,14 @@
 [build-system]
-requires = ["setuptools>=67", "setuptools_scm[toml]>=7.1"]
+requires = ["setuptools>=77", "setuptools_scm[toml]>=7.1"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "g3w-admin-plugins"
 dynamic = ["version"]
-description = "On-demand manager for public G3W-ADMIN plugins"
+description = "Discover, install, and configure G3W-SUITE plugins via web or CLI."
 readme = "README.md"
+license = "MPL-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.9"
 dependencies = ["Django>=4.2", "packaging>=21"]
 classifiers = [

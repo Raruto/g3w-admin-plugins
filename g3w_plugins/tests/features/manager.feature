@@ -8,6 +8,19 @@ Feature: Managing plugin configuration
     When the manager runs in Docker without a configured directory
     Then the Docker plugin directory is used
 
+  Scenario: The host supplies a default plugin directory
+    When the manager runs outside Docker without a configured directory
+    Then the plugin directory in the service user's home is used
+
+  Scenario Outline: An explicit plugin directory overrides the default
+    When the manager uses a configured directory in "<environment>"
+    Then the configured plugin directory is used
+
+    Examples:
+      | environment |
+      | Docker      |
+      | host        |
+
   Scenario: Configuring an existing manager does not duplicate it
     When the manager configures an app list containing itself
     Then the manager appears only once
@@ -15,6 +28,25 @@ Feature: Managing plugin configuration
   Scenario: Enabling and disabling a plugin preserves unmanaged apps
     When panoramax is enabled and then disabled
     Then unmanaged applications remain configured
+
+  Scenario Outline: An external plugin cannot fall back to another installation
+    When panoramax is "<condition>" in its managed installation
+    Then configuration rejects the incompatible plugin installation
+
+    Examples:
+      | condition                         |
+      | missing                           |
+      | loaded elsewhere                  |
+      | namespace with another location   |
+      | namespace with regular global app |
+
+  Scenario: An external plugin already loaded from its managed installation is accepted
+    When panoramax is "loaded from its managed installation" in its managed installation
+    Then the managed plugin remains configured
+
+  Scenario: A namespace package contained in its managed installation is accepted
+    When panoramax is "namespace only in managed installation" in its managed installation
+    Then the managed plugin remains configured
 
   Scenario: Preparation failure preserves the previous state
     When preparation of panoramax fails before publication

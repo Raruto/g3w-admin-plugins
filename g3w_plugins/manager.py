@@ -1,6 +1,7 @@
 """Maintain the plugin catalog, isolated installations and desired application state."""
 
 import contextlib
+import importlib.machinery
 import importlib.metadata
 import importlib.util
 import json
@@ -37,13 +38,12 @@ def in_docker():
 
 
 def directory():
-    """Resolve the persistent state directory, using the Docker default when available."""
+    """Resolve the persistent state directory and propagate a default to subprocesses."""
     value = os.environ.get("G3W_PLUGINS_DIR")
-    if not value and in_docker():
-        value = str(DOCKER_PLUGIN_DIR)
-        os.environ["G3W_PLUGINS_DIR"] = value
     if not value:
-        raise RuntimeError("Set G3W_PLUGINS_DIR to a persistent, writable directory")
+        default = DOCKER_PLUGIN_DIR if in_docker() else Path.home() / ".g3w_plugins"
+        value = str(default.resolve())
+        os.environ["G3W_PLUGINS_DIR"] = value
     return Path(value).resolve()
 
 
@@ -107,6 +107,13 @@ def child_lock_options(lock):
 
 def normalized(name):
     return name.lower().replace("_", "-").replace(".", "-")
+
+
+def spec_in_directory(spec, directory):
+    if spec is None:
+        return False
+    paths = [spec.origin] if spec.origin is not None else spec.submodule_search_locations or []
+    return bool(paths) and all(Path(path).resolve().is_relative_to(directory) for path in paths)
 
 
 def validate_change(name, enabled):
@@ -268,7 +275,25 @@ def configure(apps):
                         f"Plugin dependency {package}=={dist.version} conflicts with "
                         f"the installed version {base[package]}; reinstall the managed plugins"
                     )
-        sys.path.insert(0, str(site))
+        for package, enabled in state["plugins"].items():
+            if enabled and package in CATALOG:
+                app = CATALOG[package]
+                spec = importlib.machinery.PathFinder.find_spec(app, [str(site)])
+                if spec is not None and spec.origin is None:
+                    spec = importlib.machinery.PathFinder.find_spec(app, [str(site), *sys.path])
+                if not spec_in_directory(spec, site.resolve()):
+                    raise RuntimeError(
+                        f"Managed plugin {package} is missing from or resolves outside {site}; reinstall it"
+                    )
+                if app in sys.modules and not spec_in_directory(
+                    getattr(sys.modules[app], "__spec__", None), site.resolve()
+                ):
+                    raise RuntimeError(
+                        f"Managed plugin {package} was already loaded outside {site}; restart the process"
+                    )
+        site_path = str(site)
+        sys.path[:] = [entry for entry in sys.path if entry != site_path]
+        sys.path.insert(0, site_path)
     for package, enabled in state["plugins"].items():
         app = MANAGED[package]
         if not enabled or package in CATALOG:

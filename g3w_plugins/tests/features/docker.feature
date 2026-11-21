@@ -26,3 +26,8 @@ Feature: Plugin manager in G3W Docker
     Then the plugin is active and its URL, template and sitetrees are available
     When panoramax is disabled through the management command
     Then the plugin is disabled after restart
+
+  Scenario: Uninstalling the manager preserves downloaded plugins
+    Given an isolated installed manager and a downloaded plugin
+    When the manager is uninstalled
+    Then the plugin files and state remain without automatic activation

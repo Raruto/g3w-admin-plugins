@@ -52,7 +52,7 @@ jobs:
           path: docker-reference
       - name: Run Docker BDD scenarios
         run: |
-          python3 -m pip install --break-system-packages -r requirements_test.txt
+          python3 -m pip install --break-system-packages -e . -r requirements_test.txt
           cp docker-reference/config/g3w-suite/settings_docker.py /tmp/docker-settings.py
           cp /tmp/docker-settings.py /code/g3w-admin/base/settings/local_settings.py
           mkdir -p /shared-volume/media /shared-volume/project_data

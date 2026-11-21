@@ -1,0 +1,1 @@
+import g3w_plugins.bootstrap; g3w_plugins.bootstrap.install()

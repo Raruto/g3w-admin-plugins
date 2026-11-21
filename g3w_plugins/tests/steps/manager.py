@@ -1,3 +1,5 @@
+import contextlib
+import importlib.util
 import json
 import os
 import subprocess
@@ -26,7 +28,14 @@ def isolated_manager(context):
 
 
 def install(command, **kwargs):
-    Path(command[command.index("--target") + 1]).mkdir()
+    site = Path(command[command.index("--target") + 1])
+    site.mkdir()
+    for argument in command:
+        package = argument.split("==", 1)[0]
+        if package in manager.CATALOG:
+            module = site / manager.CATALOG[package]
+            module.mkdir()
+            (module / "__init__.py").write_text("", encoding="utf-8")
 
 
 def rejected(function, exception, message):
@@ -51,6 +60,47 @@ def docker_directory(context):
 def docker_default(context):
     assert context.directory == context.docker_root.resolve()
     assert context.directory_env == str(context.docker_root.resolve())
+
+
+@when("the manager runs outside Docker without a configured directory")
+def host_directory(context):
+    with patch.dict(os.environ, {"G3W_PLUGINS_DIR": ""}), \
+            patch.object(manager, "in_docker", return_value=False), \
+            patch.object(Path, "home", return_value=context.manager_root):
+        context.directory = manager.directory()
+        context.directory_env = os.environ["G3W_PLUGINS_DIR"]
+        env = dict(os.environ)
+        env["PYTHONPATH"] = os.pathsep.join(
+            [str(Path(manager.__file__).resolve().parent.parent), env.get("PYTHONPATH", "")]
+        )
+        child = subprocess.run(
+            [sys.executable, "-c", "from g3w_plugins.manager import directory; print(directory())"],
+            cwd=context.manager_root, env=env, text=True, capture_output=True, check=True,
+        )
+        context.child_directory = Path(child.stdout.strip())
+
+
+@then("the plugin directory in the service user's home is used")
+def home_default(context):
+    expected = (context.manager_root / ".g3w_plugins").resolve()
+    assert context.directory == expected
+    assert context.directory_env == str(expected)
+    assert context.child_directory == expected
+
+
+@when('the manager uses a configured directory in "{environment}"')
+def configured_directory(context, environment):
+    context.explicit_directory = context.manager_root / "custom"
+    with patch.dict(os.environ, {"G3W_PLUGINS_DIR": str(context.explicit_directory)}), \
+            patch.object(manager, "in_docker", return_value=environment == "Docker"):
+        context.directory = manager.directory()
+        context.directory_env = os.environ["G3W_PLUGINS_DIR"]
+
+
+@then("the configured plugin directory is used")
+def explicit_default(context):
+    assert context.directory == context.explicit_directory.resolve()
+    assert context.directory_env == str(context.explicit_directory)
 
 
 @when("the manager configures an app list containing itself")
@@ -82,6 +132,53 @@ def unmanaged_remain(context):
     assert context.enabled_apps == ["editing", "portal", "panoramax", "g3w_plugins"]
     assert context.disabled_state["site"] is None
     assert context.disabled_apps == ["editing", "portal", "g3w_plugins"]
+
+
+@when('panoramax is "{condition}" in its managed installation')
+def managed_plugin_availability(context, condition):
+    site = context.manager_root / ("site-" + "d" * 32)
+    site.mkdir()
+    (context.manager_root / "state.json").write_text(json.dumps({
+        "plugins": {"g3w-admin-panoramax": True}, "site": site.name,
+    }), encoding="utf-8")
+    other = context.manager_root / "other"
+    other.mkdir()
+    paths = [other] if condition == "missing" else (
+        [site] if condition == "namespace only in managed installation" else [other, site]
+    )
+    for path in paths:
+        module = path / "panoramax"
+        module.mkdir()
+        if not condition.startswith("namespace") or (
+            condition == "namespace with regular global app" and path == other
+        ):
+            (module / "__init__.py").write_text("", encoding="utf-8")
+    sys.path.insert(0, str(other))
+    if condition == "missing" or condition.startswith("namespace"):
+        modules = contextlib.nullcontext()
+    else:
+        selected = site if condition == "loaded from its managed installation" else other
+        spec = importlib.util.spec_from_file_location("panoramax", selected / "panoramax" / "__init__.py")
+        modules = patch.dict(sys.modules, {"panoramax": importlib.util.module_from_spec(spec)})
+    context.availability_error = None
+    context.availability_apps = ["editing"]
+    with modules:
+        try:
+            manager.configure(context.availability_apps)
+        except RuntimeError as error:
+            context.availability_error = str(error)
+
+
+@then("configuration rejects the incompatible plugin installation")
+def reject_incompatible_plugin(context):
+    assert context.availability_error and "panoramax" in context.availability_error
+    assert context.availability_apps == ["editing"]
+
+
+@then("the managed plugin remains configured")
+def accept_managed_plugin(context):
+    assert context.availability_error is None, context.availability_error
+    assert "panoramax" in context.availability_apps
 
 
 @when("preparation of panoramax fails before publication")
@@ -178,7 +275,9 @@ def no_install(context):
 @given("an external portal installation")
 def external_portal(context):
     context.site = "site-" + "c" * 32
-    (context.manager_root / context.site).mkdir()
+    module = context.manager_root / context.site / "portal"
+    module.mkdir(parents=True)
+    (module / "__init__.py").write_text("", encoding="utf-8")
     (context.manager_root / "state.json").write_text(json.dumps({
         "plugins": {"g3w-admin-portal": True}, "site": context.site,
     }), encoding="utf-8")

@@ -6,6 +6,7 @@ from html.parser import HTMLParser
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import TestCase
 from unittest.mock import patch
 
 from behave import then, when
@@ -71,6 +72,49 @@ def register_sidebar(context):
 @then("the existing two-argument and three-argument hooks are preserved")
 def sidebar_hooks(context):
     assert context.hook_results == [(True, True), (True, True)]
+
+
+@when("the plugin initializes its application")
+def initialize_application(context):
+    from g3w_plugins.apps import PluginsConfig
+    sitetreeapp = SimpleNamespace(_ITEMS_PROCESSOR=None, _ITEMS_PROCESSOR_ARGS_LEN=3)
+    sitetreeapp.register_items_hook = lambda hook: setattr(sitetreeapp, "_ITEMS_PROCESSOR", hook)
+    config = PluginsConfig("g3w_plugins", sys.modules["g3w_plugins"])
+    with patch.dict(sys.modules, {"sitetree": SimpleNamespace(sitetreeapp=sitetreeapp)}), \
+            patch.dict(os.environ, {"G3WSUITE_CONSUMER": "1"}), \
+            TestCase().assertLogs("g3w_plugins.apps", level="INFO") as captured:
+        config.ready()
+    context.startup_records = captured.records
+
+
+@then("an informational startup event is logged")
+def startup_event(context):
+    assert len(context.startup_records) == 1
+    assert context.startup_records[0].levelname == "INFO"
+    assert context.startup_records[0].getMessage() == "G3W plugin manager initialized"
+
+
+@when("plugin application initialization fails")
+def fail_application_initialization(context):
+    from g3w_plugins.apps import PluginsConfig, logger
+    sitetreeapp = SimpleNamespace(_ITEMS_PROCESSOR=None, _ITEMS_PROCESSOR_ARGS_LEN=3)
+    config = PluginsConfig("g3w_plugins", sys.modules["g3w_plugins"])
+    with patch.object(sitetreeapp, "register_items_hook", side_effect=RuntimeError("startup failed"),
+                      create=True), \
+            patch.dict(sys.modules, {"sitetree": SimpleNamespace(sitetreeapp=sitetreeapp)}), \
+            patch.dict(os.environ, {"G3WSUITE_CONSUMER": "1"}), patch.object(logger, "info") as info:
+        try:
+            config.ready()
+        except RuntimeError as error:
+            assert str(error) == "startup failed"
+        else:
+            raise AssertionError("Startup should have failed")
+    context.startup_info_calls = info.call_count
+
+
+@then("no startup success event is logged")
+def no_startup_event(context):
+    assert context.startup_info_calls == 0
 
 
 @when("status is requested for matching and outdated web configurations")

@@ -7,6 +7,7 @@ The suite uses Behave feature files and Python step implementations:
 | [`access.feature`](features/access.feature) | Superuser access, CSRF and action validation |
 | [`catalog.feature`](features/catalog.feature) | Catalog configuration and installation failure |
 | [`manager.feature`](features/manager.feature) | State, installation, updates, locks and bundled modules |
+| [`bootstrap.feature`](features/bootstrap.feature) | Automatic G3W settings integration and candidate state |
 | [`jobs.feature`](features/jobs.feature) | Background jobs, progress and error handling |
 | [`reload.feature`](features/reload.feature) | Preparation, reload coordination and consumer readiness |
 | [`web.feature`](features/web.feature) | Page, sidebar, status and PyPI version checks |
@@ -42,8 +43,8 @@ Linux pidfds and are skipped on unsupported platforms.
 temporarily replace the container's local settings, run migrations and install
 Panoramax from PyPI. Never point them at production data.
 
-The tests add the manager to a temporary copy of the upstream settings before
-plugin-specific settings. The command scenario starts with portal disabled and
+The tests use the unmodified upstream settings and the installed startup hook.
+The command scenario starts with portal disabled and
 does not validate the portal frontend. See
 [`ci.yml`](../../.github/workflows/ci.yml) for the disposable CI setup.
 

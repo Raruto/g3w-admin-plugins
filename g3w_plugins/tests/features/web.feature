@@ -12,6 +12,14 @@ Feature: Plugin administration status and controls
     When the plugin registers its sidebar hook twice
     Then the existing two-argument and three-argument hooks are preserved
 
+  Scenario: Successful startup is logged
+    When the plugin initializes its application
+    Then an informational startup event is logged
+
+  Scenario: Failed startup does not log success
+    When plugin application initialization fails
+    Then no startup success event is logged
+
   Scenario: Status confirms only the active web worker configuration
     When status is requested for matching and outdated web configurations
     Then only the matching web configuration is confirmed

@@ -2,7 +2,8 @@
 
 [`commands/plugins.py`](commands/plugins.py) registers `manage.py plugins` in a
 configured G3W-ADMIN installation. Run it from the G3W-ADMIN directory with the
-same persistent `G3W_PLUGINS_DIR` used by the web and consumer processes.
+same state directory used by the web and consumer processes. If they use different
+accounts or a non-default directory, set `G3W_PLUGINS_DIR` to their shared path.
 
 | Command | Effect |
 |---|---|

@@ -3,11 +3,24 @@
 This Django app maintains a desired plugin configuration separately from the configuration
 loaded by each running process. See the [main README](../README.md) for installation and use.
 
+## After installation
+
+Restart the web and consumer processes, then open **Plugin** in the sidebar as a
+superuser. You can also use `/admin/plugins/` when a frontend is enabled, or
+`/plugins/` otherwise; include any configured language prefix.
+
+If the sidebar entry is missing, register the menu from the G3W-ADMIN directory:
+
+```sh
+python manage.py sitetree_resync_apps g3w_plugins
+```
+
 ## Modules
 
 | Path | Responsibility |
 |---|---|
 | [`manager.py`](manager.py) | Catalog, persistent state, locking, package installation and `configure()` |
+| [`bootstrap.py`](bootstrap.py) | Startup hook for the initial G3W settings assignment |
 | [`jobs.py`](jobs.py) | Background preparation, progress and interrupted-job detection |
 | [`reload.py`](reload.py) | Candidate preparation, web reload and consumer heartbeat |
 | [`windows_locks.py`](windows_locks.py) | Windows locks and handle inheritance for child processes |
@@ -39,15 +52,27 @@ the responding worker. With Huey enabled, confirmation also requires a fresh con
 heartbeat for that state. It does not confirm that every web worker has restarted or
 that individual Huey tasks have run.
 
-`configure()` runs during Django settings initialization, before plugin-specific
-settings. It loads the published state, or the temporary candidate when invoked by a
-preparation subprocess, and updates `G3WADMIN_LOCAL_MORE_APPS`. Apps without a saved
-decision retain their original configuration.
+The installed `.pth` startup hook registers an import finder in each Python process.
+When G3W imports its local settings, the finder inserts `configure()` in the compiled
+settings code, immediately after the first top-level assignment to
+`G3WADMIN_LOCAL_MORE_APPS`. The file itself is not changed. The call adds the manager
+and loads the published state, or the temporary candidate in a preparation subprocess.
+Apps without a saved decision retain their original configuration.
+
+This requires normal Python `site` initialization and a source-based
+`base.settings.local_settings`. Other settings layouts must call `configure()`
+explicitly before plugin-dependent settings. The editable-wheel build uses a
+setuptools internal extension point to include the startup hook; verify both
+regular and editable installs when updating setuptools.
+
+After successful Django app initialization, `g3w_plugins.apps` emits an `INFO`
+event (normally once per process). Visibility depends on the logging settings.
 
 ## Persistent state
 
-All paths below are relative to `G3W_PLUGINS_DIR` (default
-`/shared-volume/.g3w_plugins` in Docker):
+All paths below are relative to the state directory: `~/.g3w_plugins` under the
+service user's home, or `/shared-volume/.g3w_plugins` in Docker.
+`G3W_PLUGINS_DIR` can override either default.
 
 | Path | Purpose |
 |---|---|
@@ -72,13 +97,25 @@ The installed version shown is from the current worker and changes after reload.
 
 ## Deployment constraints
 
+- Disable `qes` before `editing`. Choose another `FRONTEND` before disabling
+  `portal`; published Docker settings use `portal` by default.
+- After upgrading from the old `plugins` app, restart web and consumer and run
+  `python manage.py sitetree_resync_apps g3w_plugins` to refresh the sidebar.
 - Protect the state directory and package sources from untrusted writes. Enabling a
   catalogued package also installs its dependencies and executes third-party code.
+- If an enabled external plugin is missing from its selected installation, or its
+  app resolves outside that installation, startup fails instead of using another
+  copy. Restore the selected directory or rebuild the managed installation.
 - Web and consumer processes need the same state and installed packages, Python
   platform and compatible G3W image. A dependency conflict after an image change
   stops startup. To rebuild without starting Django, run
   `python -c "from g3w_plugins.manager import change; change('g3w-admin-panoramax', True)"`
-  in the new runtime, naming an enabled external plugin and setting `G3W_PLUGINS_DIR`.
+  in the new runtime, naming an enabled external plugin and using the existing
+  state directory (set `G3W_PLUGINS_DIR` if it differs from the default).
+- The home-directory default is shared by installations running under the same
+  account. Use distinct `G3W_PLUGINS_DIR` values to isolate installations; when
+  web and consumer run under different accounts, set the same shared, writable
+  directory for both.
 - GUI preparation runs in a separate process on POSIX and Windows; one GUI change
   runs at a time. Windows processes using the same state directory must share one
   host and resolved path, and must not share it with Linux. Stop all web and CLI
