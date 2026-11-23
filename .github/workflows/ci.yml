@@ -11,6 +11,8 @@ permissions:
 jobs:
   ci:
     uses: g3w-suite/.github/.github/workflows/ci.yml@main
+    with:
+      install-package: true
 
   docker-tests:
     runs-on: ubuntu-24.04

@@ -179,14 +179,13 @@ def isolated_installation(context):
     context.uninstall_env = dict(os.environ, PYTHONNOUSERSITE="1")
     for name in ("PYTHONPATH", "PYTHONHOME", "DJANGO_SETTINGS_MODULE", "G3W_PLUGINS_CANDIDATE"):
         context.uninstall_env.pop(name, None)
-    packages_dir = context.uninstall_root / "packages"
-    packages_dir.mkdir()
+    venv = context.uninstall_root / "venv"
+    isolated_command(context, [sys.executable, "-m", "venv", "--without-pip", str(venv)])
+    context.uninstall_python = venv / "bin" / "python"
     repository = Path(__file__).resolve().parents[3]
     isolated_command(context, [
-        sys.executable, "-m", "pip", "install", "--target", str(packages_dir), str(repository),
+        sys.executable, "-m", "pip", "--python", str(context.uninstall_python), "install", str(repository),
     ])
-    context.uninstall_python = sys.executable
-    context.uninstall_env["PYTHONPATH"] = str(packages_dir)
     settings = context.uninstall_root / "base" / "settings"
     settings.mkdir(parents=True)
     (settings.parent / "__init__.py").write_text("", encoding="utf-8")
@@ -213,9 +212,9 @@ def isolated_installation(context):
 
 @when("the manager is uninstalled")
 def uninstall_manager(context):
-    packages_dir = context.uninstall_root / "packages"
     isolated_command(context, [
-        sys.executable, "-m", "pip", "uninstall", "-y", "--target", str(packages_dir), "g3w-admin-plugins",
+        sys.executable, "-m", "pip", "--python", str(context.uninstall_python),
+        "uninstall", "-y", "g3w-admin-plugins",
     ])
 
 
