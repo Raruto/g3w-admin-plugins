@@ -180,12 +180,11 @@ def isolated_installation(context):
     for name in ("PYTHONPATH", "PYTHONHOME", "DJANGO_SETTINGS_MODULE", "G3W_PLUGINS_CANDIDATE"):
         context.uninstall_env.pop(name, None)
     environment = context.uninstall_root / "venv"
-    isolated_command(context, [sys.executable, "-m", "venv", "--without-pip", str(environment)])
+    isolated_command(context, [sys.executable, "-m", "venv", str(environment)])
     context.uninstall_python = environment / "bin" / "python"
     repository = Path(__file__).resolve().parents[3]
     isolated_command(context, [
-        sys.executable, "-m", "pip", "--python", str(context.uninstall_python),
-        "install", str(repository),
+        str(context.uninstall_python), "-m", "pip", "install", str(repository),
     ])
     settings = context.uninstall_root / "base" / "settings"
     settings.mkdir(parents=True)
